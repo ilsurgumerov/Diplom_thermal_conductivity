@@ -1,0 +1,153 @@
+#include <iostream>
+#include <fstream>
+#include <Eigen/Sparse>
+
+using namespace std;
+using namespace Eigen;
+
+double f(double x, double t) {
+    return 0;
+}
+
+double k(double x, double t) {
+    return 1;
+}
+
+double u_true(double x, double t) {
+    return 7 * exp(-(4 * 3.1415) * (4 * 3.1415) * t) * sin(4 * 3.1415 * x);
+}
+
+double initial_condition(double x) {
+    if (x >= 0 && x <= 0.3) {
+        return x / 0.3;
+    }
+    return (1 - x) / 0.7;
+}
+
+double final_condition(double x) {
+    if (x >= 0 && x <= 0.3) {
+        return x / 0.3;
+    }
+    return (1 - x) / 0.7;
+}
+
+void write_data_to_file(ofstream& file, double time, const VectorXd& u) {
+    file << "Time = " << time << endl;
+
+    for (int i = 0; i < u.size(); ++i) {
+        file << u(i);
+        if (i < u.size() - 1) {
+            file << " ";
+        }
+    }
+    file << endl;
+}
+
+VectorXd solve_heat_equation(double L, double T, int N, int M, double sigma, const VectorXd& v) {
+    double dx = L / N;
+    double dx2 = dx * dx;
+    double dt = T / M;
+    double l1 = 0;
+    double l2 = 0;
+    double alpha, beta, gamma;
+
+    SparseMatrix<double> A(N + 1, N + 1);
+    VectorXd b(N + 1), u_prev(N + 1);
+
+    // Начальное условие
+    for (int i = 0; i < N + 1; i++) {
+        u_prev(i) = v(i);
+    }
+
+    // Решение для каждого временного шага
+    for (int m = 0; m < M; m++) {
+        // Построение матрицы системы уравнений и вектора правой части
+        vector<Triplet<double>> triplets;
+        triplets.reserve(3 * (N - 1) + 2);
+        triplets.push_back(Triplet<double>(0, 0, 1.)); triplets.push_back(Triplet<double>(N, N, 1.));
+
+        for (int i = 1; i < N; i++) {
+            alpha = k(i * dx + dx / 2, (m + 1) * dt) * sigma / dx2;
+            gamma = k(i * dx - dx / 2, (m + 1) * dt) * sigma / dx2;
+            beta = -(1 / dt + (k(i * dx + dx / 2, (m + 1) * dt) + k(i * dx - dx / 2, (m + 1) * dt)) * sigma / dx2);
+
+            triplets.push_back(Triplet<double>(i, i + 1, alpha));
+            triplets.push_back(Triplet<double>(i, i, beta));
+            triplets.push_back(Triplet<double>(i, i - 1, gamma));
+
+            b(i) = k(i * dx + dx / 2, m * dt) * u_prev(i + 1) * (sigma - 1) / dx2 \
+                + k(i * dx - dx / 2, m * dt) * u_prev(i - 1) * (sigma - 1) / dx2 \
+                + f(i * dx, m * dt) \
+                - (1 / dt + (k(i * dx + dx / 2, m * dt) + k(i * dx - dx / 2, m * dt)) * (sigma - 1) / dx2) * u_prev(i);
+        }
+
+        // Учет граничных условий
+        b(0) = l1;
+        b(N) = l2;
+
+        A.setFromTriplets(triplets.begin(), triplets.end());
+
+        // Решение системы уравнений
+        SparseLU<SparseMatrix<double>> solver;
+        solver.compute(A);
+        VectorXd u = solver.solve(b);
+
+        //// Проверика с истинным решением
+        // cout << "Time = " << m * dt << ", norm = " << norm(dx, m * dt, u_prev) << endl;
+
+        // Обновление предыдущего решения для следующего временного шага
+        u_prev = u;
+    }
+
+    return u_prev;
+}
+
+void reverse_solve(double iter_count, double L, double T, int N, int M, double sigma, ofstream& output_file) {
+    VectorXd v(N + 1), y_N(N + 1), fi(N + 1);
+    v.setZero();
+
+    // решение прямой задачи для нахождения вектора фи
+    for (int j = 0; j < N + 1; j++) {
+        v(j) += initial_condition(j * L / N);
+    }
+
+    fi = solve_heat_equation(L, T, N, M, sigma, v);
+
+    // начальное приближение
+    v.setZero();
+
+    for (int i = 0; i < iter_count; i++) {
+        y_N = solve_heat_equation(L, T, N, M, sigma, v);
+
+        for (int j = 0; j < N + 1; j++) {
+            v(j) += (fi(j) - y_N(j));
+        }
+
+        write_data_to_file(output_file, i, v);
+    }
+
+}
+
+
+
+int main() {
+    double L = 1.0;
+    double T = 0.1;
+    int N = 100;
+    int M = 1000;
+
+    ofstream output_revers("output_revers.txt");
+    ofstream output_params("output_params.txt");
+
+    output_params << "L = " << L << endl;
+    output_params << "T = " << T << endl;
+    output_params << "N = " << N << endl;
+    output_params << "M = " << M << endl;
+
+    reverse_solve(100, L, T, N, M, 0.5, output_revers);
+
+    output_params.close();
+    output_revers.close();
+
+    return 0;
+}
